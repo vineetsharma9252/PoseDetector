@@ -1,0 +1,87 @@
+/* Previous styles remain, add these new ones */
+
+.exercise-selector {
+  display: flex;
+  justify-content: center;
+  gap: 15px;
+  margin-bottom: 20px;
+}
+
+.exercise-selector button {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 6px;
+  background-color: #e0e0e0;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-weight: bold;
+}
+
+.exercise-selector button.active {
+  background-color: #4CAF50;
+  color: white;
+}
+
+.feedback-panel {
+  background-color: white;
+  padding: 20px;
+  border-radius: 8px;
+  margin: 20px auto;
+  max-width: 800px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.feedback-section {
+  margin: 15px 0;
+  padding: 15px;
+  border-radius: 6px;
+}
+
+.feedback-section.issues {
+  background-color: #ffebee;
+  border-left: 4px solid #f44336;
+}
+
+.feedback-section.correct {
+  background-color: #e8f5e9;
+  border-left: 4px solid #4CAF50;
+}
+
+.feedback-section h3 {
+  margin-top: 0;
+}
+
+.feedback-section ul {
+  padding-left: 20px;
+}
+
+.three-container {
+  width: 100%;
+  height: 400px;
+  margin: 20px auto;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+.control-btn.toggle-3d {
+  background-color: #2196F3;
+  color: white;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .controls {
+    flex-direction: column;
+    align-items: center;
+  }
+  
+  .control-btn {
+    width: 100%;
+    max-width: 300px;
+  }
+  
+  .three-container {
+    height: 300px;
+  }
+}

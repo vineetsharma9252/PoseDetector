@@ -2,13 +2,32 @@ import { useState, useEffect, useRef } from "react";
 import Webcam from "react-webcam";
 import * as THREE from "three";
 import { Canvas } from "@react-three/fiber";
-import { Text } from "@react-three/drei";
 import {
   PoseLandmarker,
   FilesetResolver,
   DrawingUtils,
 } from "@mediapipe/tasks-vision";
 import "./App.css";
+
+// Pose connections for 33 landmarks (MediaPipe standard)
+const POSE_CONNECTIONS = [
+  [11, 12], // Shoulders
+  [11, 13], // Left shoulder to elbow
+  [13, 15], // Left elbow to wrist
+  [12, 14], // Right shoulder to elbow
+  [14, 16], // Right elbow to wrist
+  [11, 23], // Left shoulder to hip
+  [12, 24], // Right shoulder to hip
+  [23, 24], // Hips
+  [23, 25], // Left hip to knee
+  [24, 26], // Right hip to knee
+  [25, 27], // Left knee to ankle
+  [26, 28], // Right knee to ankle
+  [27, 29], // Left ankle to heel
+  [28, 30], // Right ankle to heel
+  [29, 31], // Left heel to toe
+  [30, 32], // Right heel to toe
+];
 
 function App() {
   const [exercise, setExercise] = useState("squats");
@@ -21,6 +40,7 @@ function App() {
   });
   const [webcamError, setWebcamError] = useState(null);
   const [keypoints, setKeypoints] = useState([]);
+
   const webcamRef = useRef(null);
   const canvasRef = useRef(null);
   const poseLandmarkerRef = useRef(null);
@@ -28,73 +48,80 @@ function App() {
   const lastVideoTimeRef = useRef(-1);
   const webcamRunningRef = useRef(false);
 
-
   useEffect(() => {
     const initializePoseLandmarker = async () => {
       try {
+        console.log("Initializing Pose Landmarker...");
         const vision = await FilesetResolver.forVisionTasks(
-          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.8/wasm"
         );
-        const poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath:
-              "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
-            delegate: "GPU",
-          },
-          runningMode: "VIDEO",
-          numPoses: 1,
-        });
-        poseLandmarkerRef.current = poseLandmarker;
+        console.log("Vision tasks resolved");
+
+        let modelAssetPath =
+          "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task";
+
+        try {
+          const poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+            baseOptions: {
+              modelAssetPath,
+              delegate: "GPU",
+            },
+            runningMode: "VIDEO",
+            numPoses: 1,
+            minPoseDetectionConfidence: 0.4, // Lowered for sensitivity
+            minPosePresenceConfidence: 0.4,
+            minTrackingConfidence: 0.4,
+          });
+          poseLandmarkerRef.current = poseLandmarker;
+          console.log("Pose Landmarker initialized with heavy model");
+        } catch (error) {
+          console.warn("Heavy model failed, falling back to full model:", error);
+          modelAssetPath =
+            "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task";
+          const poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+            baseOptions: {
+              modelAssetPath,
+              delegate: "GPU",
+            },
+            runningMode: "VIDEO",
+            numPoses: 1,
+            minPoseDetectionConfidence: 0.4,
+            minPosePresenceConfidence: 0.4,
+            minTrackingConfidence: 0.4,
+          });
+          poseLandmarkerRef.current = poseLandmarker;
+          console.log("Pose Landmarker initialized with full model");
+        }
       } catch (error) {
         console.error("Error initializing Pose Landmarker:", error);
-        setWebcamError("Failed to initialize pose detection");
+        setWebcamError("Failed to initialize pose detection. Please try reloading.");
       }
     };
 
     initializePoseLandmarker();
 
     return () => {
+      console.log("Cleaning up Pose Landmarker...");
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
       webcamRunningRef.current = false;
+      if (poseLandmarkerRef.current) {
+        poseLandmarkerRef.current.close();
+      }
     };
   }, []);
 
-
-  const checkWebcamAvailability = async () => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setWebcamError("Webcam access not supported by your browser");
-      return false;
-    }
-
-    try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const hasCamera = devices.some((device) => device.kind === "videoinput");
-      if (!hasCamera) {
-        setWebcamError("No camera found on your device");
-        return false;
-      }
-      return true;
-    } catch (error) {
-      setWebcamError("Could not check camera availability");
-      return false;
-    }
-  };
-
-
   const toggleStream = async () => {
     if (isStreaming) {
+      console.log("Stopping webcam stream...");
       webcamRunningRef.current = false;
-    
-      window.location.reload();
       setIsStreaming(false);
-      setExercise(null);
-      setWebcamError(null);
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
     } else {
+      console.log("Starting webcam stream...");
       try {
         const hasWebcam = await checkWebcamAvailability();
         if (!hasWebcam) return;
@@ -109,14 +136,33 @@ function App() {
     }
   };
 
-  
+  const checkWebcamAvailability = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setWebcamError("Webcam access not supported by your browser");
+      return false;
+    }
+
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const hasCamera = devices.some((device) => device.kind === "videoinput");
+      if (!hasCamera) {
+        setWebcamError("No camera found on your device");
+        return false;
+      }
+      console.log("Webcam available");
+      return true;
+    } catch (error) {
+      console.error("Error checking webcam:", error);
+      setWebcamError("Could not check camera availability");
+      return false;
+    }
+  };
+
   const handleWebcamError = (error) => {
+    console.error("Webcam error:", error);
     if (error.name === "NotAllowedError") {
       setWebcamError("Camera access denied. Please allow camera permissions.");
-    } else if (
-      error.name === "NotFoundError" ||
-      error.name === "OverconstrainedError"
-    ) {
+    } else if (error.name === "NotFoundError" || error.name === "OverconstrainedError") {
       setWebcamError("No suitable camera found.");
     } else {
       setWebcamError("Could not access the camera: " + error.message);
@@ -125,25 +171,12 @@ function App() {
     setIsStreaming(false);
   };
 
-  
-  const handleWebcamReady = () => {
-    const video = webcamRef.current?.video;
-    if (video && webcamRunningRef.current) {
-      predictWebcam();
-    }
-  };
-
-  
   const predictWebcam = () => {
     const video = webcamRef.current?.video;
     const canvas = canvasRef.current;
 
-    if (
-      !video ||
-      !canvas ||
-      !poseLandmarkerRef.current ||
-      !webcamRunningRef.current
-    ) {
+    if (!video || !canvas || !poseLandmarkerRef.current || !webcamRunningRef.current) {
+      console.warn("Cannot predict: Missing video, canvas, or pose landmarker");
       return;
     }
 
@@ -152,6 +185,7 @@ function App() {
     const poseLandmarker = poseLandmarkerRef.current;
 
     if (video.readyState < video.HAVE_ENOUGH_DATA) {
+      console.log("Video not ready, retrying...");
       animationFrameRef.current = requestAnimationFrame(predictWebcam);
       return;
     }
@@ -162,18 +196,19 @@ function App() {
 
       try {
         const results = poseLandmarker.detectForVideo(video, startTimeMs);
+        console.log("Pose detection results:", results);
 
         canvasCtx.save();
         canvasCtx.clearRect(0, 0, canvas.width, canvas.height);
 
         if (results.landmarks && results.landmarks.length > 0) {
           const landmarks = results.landmarks[0];
+          console.log("Detected landmarks:", landmarks);
           setKeypoints(landmarks);
+
           if (exercise) {
             const analysis = analyzePosture(landmarks, exercise);
-            console.log("Posture analysis results:", analysis);
             setFeedback(analysis);
-
             drawLandmarksWithFeedback(
               drawingUtils,
               landmarks,
@@ -182,23 +217,28 @@ function App() {
             );
           } else {
             drawingUtils.drawLandmarks(landmarks, {
-              radius: (data) =>
-                DrawingUtils.lerp(data.from.z, -0.15, 0.1, 5, 1),
+              radius: (data) => DrawingUtils.lerp(data.from.z, -0.15, 0.1, 5, 1),
               color: "#00FF00",
             });
-            drawingUtils.drawConnectors(
-              landmarks,
-              PoseLandmarker.POSE_CONNECTIONS,
-              {
-                color: "#00FF00",
-              }
-            );
+            drawingUtils.drawConnectors(landmarks, POSE_CONNECTIONS, {
+              color: "#00FF00",
+            });
           }
+        } else {
+          console.warn("No landmarks detected");
+          setFeedback({
+            issues: ["No person detected in the frame"],
+            correct: [],
+            phase: "starting",
+            problemPoints: [],
+          });
+          setKeypoints([]);
         }
 
         canvasCtx.restore();
       } catch (error) {
-        console.error("Error during detection:", error);
+        console.error("Error during pose detection:", error);
+        setWebcamError("Error processing pose detection");
       }
     }
 
@@ -207,50 +247,20 @@ function App() {
     }
   };
 
-  
-  const drawLandmarksWithFeedback = (
-    drawingUtils,
-    landmarks,
-    problemPoints,
-    isCorrect
-  ) => {
-    if (isCorrect) {
-      
-      drawingUtils.drawLandmarks(landmarks, {
-        radius: (data) => DrawingUtils.lerp(data.from.z, -0.15, 0.1, 5, 1),
-        color: "#00FF00",
-      });
-      drawingUtils.drawConnectors(landmarks, PoseLandmarker.POSE_CONNECTIONS, {
-        color: "#00FF00",
-      });
-    } else {
-      
-      drawingUtils.drawLandmarks(landmarks, {
-        radius: (data) => DrawingUtils.lerp(data.from.z, -0.15, 0.1, 5, 1),
-        color: "#00FF00",
-      });
-      
-      problemPoints.forEach((pointIndex) => {
-        if (landmarks[pointIndex]) {
-          drawingUtils.drawLandmarks([landmarks[pointIndex]], {
-            radius: 8,
-            color: "#FF0000",
-          });
-        }
-      });
+  const drawLandmarksWithFeedback = (drawingUtils, landmarks, problemPoints, isCorrect) => {
+    drawingUtils.drawLandmarks(landmarks, {
+      radius: (data) => DrawingUtils.lerp(data.from.z, -0.15, 0.1, 5, 1),
+      color: (data) => (problemPoints.includes(data.index) ? "#FF0000" : "#00FF00"),
+    });
 
-      
-      PoseLandmarker.POSE_CONNECTIONS.forEach(([start, end]) => {
-        const isProblemConnection =
-          problemPoints.includes(start) || problemPoints.includes(end);
-        drawingUtils.drawConnectors(landmarks, [[start, end]], {
-          color: isProblemConnection ? "#FF0000" : "#00FF00",
-        });
+    POSE_CONNECTIONS.forEach(([start, end]) => {
+      const isProblemConnection = problemPoints.includes(start) || problemPoints.includes(end);
+      drawingUtils.drawConnectors(landmarks, [[start, end]], {
+        color: isProblemConnection ? "#FF0000" : "#00FF00",
       });
-    }
+    });
   };
 
-  
   const analyzePosture = (landmarks, currentExercise) => {
     const analysis = {
       issues: [],
@@ -258,11 +268,14 @@ function App() {
       phase: "unknown",
       problemPoints: [],
     };
-    console.log(analyzePosture);
-    console.log("Current exercise:", currentExercise);
+
+    if (landmarks.length < 33) {
+      analysis.issues.push("Insufficient landmarks detected for analysis");
+      return analysis;
+    }
+
     if (currentExercise === "squats") {
       analyzeSquats(landmarks, analysis);
-      console.log("ANalysis is : ", analysis);
     } else if (currentExercise === "pushups") {
       analyzePushups(landmarks, analysis);
     }
@@ -270,7 +283,6 @@ function App() {
     return analysis;
   };
 
-  
   const analyzeSquats = (landmarks, analysis) => {
     const leftHip = landmarks[23];
     const rightHip = landmarks[24];
@@ -281,45 +293,38 @@ function App() {
     const leftShoulder = landmarks[11];
     const rightShoulder = landmarks[12];
 
-    console.log("Squats analysis landmarks:", landmarks);
-
     const backAngle = calculateAngle(leftShoulder, leftHip, leftKnee);
     const leftKneeAngle = calculateAngle(leftHip, leftKnee, leftAnkle);
     const rightKneeAngle = calculateAngle(rightHip, rightKnee, rightAnkle);
-    console.log(backAngle);
-    // Check if knees are too far forward (approximated by x-coordinate difference)
-    const leftKneeTooForward = leftKnee.x - leftAnkle.x > 0.1; // Knee significantly ahead of ankle
-    const rightKneeTooForward = rightKnee.x - rightAnkle.x > 0.1;
+    const leftKneeTooForward = Math.abs(leftKnee.x - leftAnkle.x) > 0.15;
+    const rightKneeTooForward = Math.abs(rightKnee.x - rightAnkle.x) > 0.15;
 
-    if (leftKneeAngle < 120 || rightKneeAngle < 120) {
+    if (leftKneeAngle < 110 && rightKneeAngle < 110) {
       analysis.phase = "descent";
     } else {
       analysis.phase = "ascent";
     }
 
-    // Feedback checks
-    if (backAngle > 30) {
+    if (backAngle > 45) {
       analysis.issues.push("Back too far forward. Keep it more upright.");
-      analysis.problemPoints.push(23, 24, 11, 12); // Hips and shoulders
+      analysis.problemPoints.push(11, 12, 23, 24);
     }
 
-    if (leftKneeAngle < 90 || rightKneeAngle < 90) {
+    if (leftKneeAngle < 80 || rightKneeAngle < 80) {
       analysis.issues.push("Knees not bent enough. Lower your squat.");
-      analysis.problemPoints.push(25, 26); // Knees
+      analysis.problemPoints.push(25, 26);
     }
 
     if (leftKneeTooForward || rightKneeTooForward) {
-      analysis.issues.push("Knees too far forward. Keep them over your toes.");
-      analysis.problemPoints.push(25, 26); // Knees
+      analysis.issues.push("Knees too far forward. Keep them over your ankles.");
+      analysis.problemPoints.push(25, 26);
     }
 
     if (analysis.issues.length === 0) {
       analysis.correct.push("Great squat form! Keep it up!");
     }
-    return analysis;
   };
 
-  // Pushups analysis
   const analyzePushups = (landmarks, analysis) => {
     const leftShoulder = landmarks[11];
     const rightShoulder = landmarks[12];
@@ -328,40 +333,31 @@ function App() {
     const leftWrist = landmarks[15];
     const rightWrist = landmarks[16];
     const leftHip = landmarks[23];
-    const rightHip = landmarks[24];
     const leftKnee = landmarks[25];
 
     const leftElbowAngle = calculateAngle(leftShoulder, leftElbow, leftWrist);
-    const rightElbowAngle = calculateAngle(
-      rightShoulder,
-      rightElbow,
-      rightWrist
-    );
+    const rightElbowAngle = calculateAngle(rightShoulder, rightElbow, rightWrist);
     const torsoAngle = calculateAngle(leftShoulder, leftHip, leftKnee);
 
-    // Check if chest is lowered enough (approximated by elbow angle < 90° in descent)
-    const chestNotLowered = leftElbowAngle > 90 || rightElbowAngle > 90;
-
-    if (leftElbowAngle < 120 || rightElbowAngle < 120) {
+    if (leftElbowAngle < 100 || rightElbowAngle < 100) {
       analysis.phase = "descent";
     } else {
       analysis.phase = "ascent";
     }
 
-    // Feedback checks
-    if (torsoAngle > 10) {
+    if (torsoAngle > 15) {
       analysis.issues.push("Back is sagging. Keep your body straight.");
-      analysis.problemPoints.push(23, 24, 11, 12); // Hips and shoulders
+      analysis.problemPoints.push(11, 12, 23, 24);
     }
 
-    if (chestNotLowered && analysis.phase === "descent") {
+    if (leftElbowAngle > 100 && rightElbowAngle > 100 && analysis.phase === "descent") {
       analysis.issues.push("Chest not lowered enough. Go lower.");
-      analysis.problemPoints.push(11, 12, 13, 14); // Shoulders and elbows
+      analysis.problemPoints.push(11, 12, 13, 14);
     }
 
-    if (leftElbowAngle > 90 || rightElbowAngle > 90) {
-      analysis.issues.push("Improper elbow angle. Keep elbows closer to body.");
-      analysis.problemPoints.push(13, 14); // Elbows
+    if (Math.abs(leftElbow.x - leftShoulder.x) > 0.2 || Math.abs(rightElbow.x - rightShoulder.x) > 0.2) {
+      analysis.issues.push("Elbows flaring out. Keep them closer to body.");
+      analysis.problemPoints.push(13, 14);
     }
 
     if (analysis.issues.length === 0) {
@@ -369,21 +365,20 @@ function App() {
     }
   };
 
-  // Helper function to calculate angle between three points
-  // Calculate angle between three points (A-B-C)
   const calculateAngle = (A, B, C) => {
     const AB = { x: A.x - B.x, y: A.y - B.y };
-    const CB = { x: C.x - B.x, y: C.y - B.y };
+    const BC = { x: C.x - B.x, y: C.y - B.y };
 
-    const dotProduct = AB.x * CB.x + AB.y * CB.y;
+    const dotProduct = AB.x * BC.x + AB.y * BC.y;
     const magAB = Math.sqrt(AB.x ** 2 + AB.y ** 2);
-    const magCB = Math.sqrt(CB.x ** 2 + CB.y ** 2);
+    const magBC = Math.sqrt(BC.x ** 2 + BC.y ** 2);
 
-    const angleRad = Math.acos(dotProduct / (magAB * magCB));
-    return (angleRad * 180) / Math.PI;
+    if (magAB === 0 || magBC === 0) return 0;
+
+    const cosTheta = Math.min(Math.max(dotProduct / (magAB * magBC), -1), 1);
+    return (Math.acos(cosTheta) * 180) / Math.PI;
   };
 
-  // Start exercise detection
   const startExercise = (exerciseType) => {
     console.log("Starting exercise:", exerciseType);
     setExercise(exerciseType);
@@ -393,10 +388,8 @@ function App() {
       phase: "starting",
       problemPoints: [],
     });
-    console.log(feedback);
   };
 
-  // Webcam constraints
   const videoConstraints = {
     width: { ideal: 1280 },
     height: { ideal: 720 },
@@ -411,12 +404,15 @@ function App() {
 
       <div className="video-container">
         {isStreaming ? (
-          <div className="video-feed-container">
+          <div className="video-feed-container" style={{ position: "relative" }}>
             <Webcam
               audio={false}
               ref={webcamRef}
               videoConstraints={videoConstraints}
-              onUserMedia={handleWebcamReady}
+              onUserMedia={() => {
+                console.log("Webcam ready");
+                if (webcamRunningRef.current) predictWebcam();
+              }}
               onUserMediaError={handleWebcamError}
               className="video-feed"
               style={{ transform: "scaleX(-1)" }}
@@ -426,7 +422,7 @@ function App() {
               className="pose-canvas"
               width={videoConstraints.width.ideal}
               height={videoConstraints.height.ideal}
-              style={{ transform: "scaleX(-1)" }}
+              style={{ transform: "scaleX(-1)", position: "absolute", top: 0, left: 0, zIndex: 10 }}
             />
           </div>
         ) : (
@@ -447,24 +443,14 @@ function App() {
         {isStreaming && (
           <>
             <button
-              onClick={() => {
-                startExercise("squats");
-                setExercise("squats");
-              }}
-              className={`exercise-btn ${
-                exercise === "squats" ? "active" : ""
-              }`}
+              onClick={() => startExercise("squats")}
+              className={`exercise-btn ${exercise === "squats" ? "active" : ""}`}
             >
               Start Squats
             </button>
             <button
-              onClick={() => {
-                startExercise("pushups");
-                setExercise("pushups");
-              }}
-              className={`exercise-btn ${
-                exercise === "pushups" ? "active" : ""
-              }`}
+              onClick={() => startExercise("pushups")}
+              className={`exercise-btn ${exercise === "pushups" ? "active" : ""}`}
             >
               Start Push-Ups
             </button>
@@ -475,8 +461,7 @@ function App() {
       {exercise && (
         <div className="feedback-panel">
           <h2>
-            {exercise === "squats" ? "Squats" : "Push-Ups"} Feedback -{" "}
-            {feedback.phase}
+            {exercise === "squats" ? "Squats" : "Push-Ups"} Feedback - {feedback.phase}
           </h2>
 
           {feedback.issues.length > 0 && (
@@ -510,32 +495,40 @@ function App() {
           {keypoints.length > 0 && (
             <group>
               {keypoints.map((point, index) => {
-                const isProblemPoint = feedback.problemPoints?.includes(index);
+                const isProblemPoint = feedback.problemPoints.includes(index);
                 return (
                   <mesh
-                    key={index}
-                    position={[
-                      point.x * 10 - 5,
-                      -point.y * 10 + 5,
-                      point.z * 10,
-                    ]}
+                    key={`point-${index}`}
+                    position={[(point.x - 0.5) * 4, -(point.y - 0.5) * 4, point.z * 4]}
                   >
-                    <sphereGeometry args={[0.1, 16, 16]} />
-                    <meshStandardMaterial
-                      color={isProblemPoint ? "#ff0000" : "#00ff00"}
-                    />
-                    {isProblemPoint && (
-                      <Text
-                        position={[0, 0.2, 0]}
-                        fontSize={0.1}
-                        color="red"
-                        anchorX="center"
-                        anchorY="middle"
-                      >
-                        {getLandmarkName(index)}
-                      </Text>
-                    )}
+                    <sphereGeometry args={[0.05, 16, 16]} />
+                    <meshStandardMaterial color={isProblemPoint ? "#ff0000" : "#00ff00"} />
                   </mesh>
+                );
+              })}
+
+              {POSE_CONNECTIONS.map(([startIdx, endIdx], connectionIdx) => {
+                if (!keypoints[startIdx] || !keypoints[endIdx]) return null;
+
+                const start = keypoints[startIdx];
+                const end = keypoints[endIdx];
+                const isProblemConnection =
+                  feedback.problemPoints.includes(startIdx) || feedback.problemPoints.includes(endIdx);
+
+                const points = [
+                  new THREE.Vector3((start.x - 0.5) * 4, -(start.y - 0.5) * 4, start.z * 4),
+                  new THREE.Vector3((end.x - 0.5) * 4, -(end.y - 0.5) * 4, end.z * 4),
+                ];
+
+                const lineGeometry = new THREE.BufferGeometry().setFromPoints(points);
+
+                return (
+                  <line key={`connection-${connectionIdx}`} geometry={lineGeometry}>
+                    <lineBasicMaterial
+                      color={isProblemConnection ? "#ff0000" : "#00ff00"}
+                      linewidth={2}
+                    />
+                  </line>
                 );
               })}
             </group>
@@ -545,29 +538,5 @@ function App() {
     </div>
   );
 }
-
-// Helper function to get landmark names
-const getLandmarkName = (index) => {
-  const landmarkNames = [
-    "Nose",
-    "Left Eye",
-    "Right Eye",
-    "Left Ear",
-    "Right Ear",
-    "Left Shoulder",
-    "Right Shoulder",
-    "Left Elbow",
-    "Right Elbow",
-    "Left Wrist",
-    "Right Wrist",
-    "Left Hip",
-    "Right Hip",
-    "Left Knee",
-    "Right Knee",
-    "Left Ankle",
-    "Right Ankle",
-  ];
-  return landmarkNames[index] || `Point ${index}`;
-};
 
 export default App;
